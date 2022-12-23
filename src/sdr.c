@@ -77,12 +77,6 @@ int __attribute__((weak)) rtlsdr_set_bias_tee(rtlsdr_dev_t *dev, int on);
 
 #define GAIN_STR_MAX_SIZE 64
 
-#ifdef NDEBUG
-    #define debug_log(...)
-#else
-    #define debug_log(...)   fprintf(stderr, __VA_ARGS__)
-#endif
-
 struct sdr_dev {
     SOCKET rtl_tcp;
     uint32_t rtl_tcp_freq; ///< last known center frequency, rtl_tcp only.
@@ -553,17 +547,17 @@ static int rtlsdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32
         // We can safely assume it's an libusb error.
         if (r < 0) {
 #ifdef LIBUSB1
-            print_logf(LOG_ERROR, __func__, "%s: %s!"
+            print_logf(LOG_ERROR, __func__, "%s: %s! "
                             "Check your RTL-SDR dongle, USB cables, and power supply.",
                     libusb_error_name(r), libusb_strerror(r));
 #else
-            print_logf(LOG_ERROR, __func__, "LIBUSB_ERROR: %d"
+            print_logf(LOG_ERROR, __func__, "LIBUSB_ERROR: %d! "
                             "Check your RTL-SDR dongle, USB cables, and power supply.",
                     r);
 #endif
             dev->running = 0;
         }
-    debug_log("rtlsdr_read_loop: rtlsdr_read_async done\n");
+    print_log(LOG_DEBUG, __func__, "rtlsdr_read_async done");
 
     return r;
 }
@@ -1073,7 +1067,7 @@ int sdr_close(sdr_dev_t *dev)
     if (!dev)
         return -1;
 
-    int ret = -1;
+    int ret = sdr_stop(dev);
 
     if (dev->rtl_tcp)
         ret = rtltcp_close(dev->rtl_tcp);
@@ -1151,7 +1145,7 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
 #ifdef RTLSDR
     if (dev->rtlsdr_dev) {
         r = rtlsdr_set_center_freq(dev->rtlsdr_dev, freq);
-        fprintf(stderr, "rtlsdr_set_center_freq %u = %d\n", freq, r);
+        print_logf(LOG_DEBUG, "SDR", "rtlsdr_set_center_freq %u = %d", freq, r);
     }
 #endif
 
@@ -1665,14 +1659,14 @@ void sdr_redirect_logging(void)
 static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
 {
     sdr_dev_t *dev = arg;
-    debug_log("acquire_thread enter...\n");
+    print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
 
     int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
     // if (cfg->verbosity > 1)
-    debug_log("acquire_thread async stop...\n");
+    print_log(LOG_DEBUG, __func__, "acquire_thread async stop...");
 
     if (r < 0) {
-        fprintf(stderr, "WARNING: async read failed (%i).\n", r);
+        print_logf(LOG_ERROR, "SDR", "async read failed (%i).", r);
     }
 
 //    sdr_event_t ev = {
@@ -1680,8 +1674,8 @@ static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
 //    };
 //    dev->async_cb(&ev, dev->async_ctx);
 
-    debug_log("acquire_thread done...\n");
-    return (void *)(intptr_t)r;
+    print_log(LOG_DEBUG, __func__, "acquire_thread done...");
+    return (THREAD_RETURN)(intptr_t)r;
 }
 
 int sdr_start(sdr_dev_t *dev, sdr_event_cb_t async_cb, void *async_ctx, uint32_t buf_num, uint32_t buf_len)
@@ -1721,24 +1715,24 @@ int sdr_stop(sdr_dev_t *dev)
         return -1;
     }
 
-    debug_log("%s: EXITING...\n", __func__);
+    print_log(LOG_DEBUG, __func__, "EXITING...");
     pthread_mutex_lock(&dev->lock);
     if (dev->exit_acquire) {
         pthread_mutex_unlock(&dev->lock);
-        debug_log("%s: Already exiting.\n", __func__);
+        print_log(LOG_DEBUG, __func__, "Already exiting.");
         return 0;
     }
     dev->exit_acquire = 1; // for rtl_tcp and SoapySDR
     sdr_stop_sync(dev); // for rtlsdr
     pthread_mutex_unlock(&dev->lock);
 
-    debug_log("%s: JOINING...\n", __func__);
+    print_log(LOG_DEBUG, __func__, "JOINING...");
     int r = pthread_join(dev->thread, NULL);
     if (r) {
         fprintf(stderr, "%s: error in pthread_join, rc: %d\n", __func__, r);
     }
 
-    debug_log("%s: EXITED.\n", __func__);
+    print_log(LOG_DEBUG, __func__, "EXITED.");
     return r;
 }
 #else

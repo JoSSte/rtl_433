@@ -1308,7 +1308,8 @@ console_handler(int signum)
     if (CTRL_C_EVENT == signum) {
         write_err("Signal caught, exiting!\n");
         g_cfg.exit_async = 1;
-        sdr_stop(g_cfg.dev);
+        // Uninstall handler, next Ctrl-C is a hard abort
+        SetConsoleCtrlHandler((PHANDLER_ROUTINE)console_handler, FALSE);
         return TRUE;
     }
     else if (CTRL_BREAK_EVENT == signum) {
@@ -1317,13 +1318,6 @@ console_handler(int signum)
         return TRUE;
     }
     return FALSE;
-}
-
-/* Only called for SIGALRM
- */
-static void sighandler(int signum)
-{
-  console_handler(signum);
 }
 
 #else
@@ -1344,7 +1338,16 @@ static void sighandler(int signum)
         write_err("Signal caught, exiting!\n");
     }
     g_cfg.exit_async = 1;
-    sdr_stop(g_cfg.dev);
+
+    // Uninstall handler, next Ctrl-C is a hard abort
+    struct sigaction sigact;
+    sigact.sa_handler = NULL;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigaction(SIGINT, &sigact, NULL);
+    sigaction(SIGTERM, &sigact, NULL);
+    sigaction(SIGQUIT, &sigact, NULL);
+    sigaction(SIGPIPE, &sigact, NULL);
 }
 #endif
 
@@ -1393,8 +1396,8 @@ static void sdr_handler(struct mg_connection *nc, int ev_type, void *ev_data)
     }
 
     if (cfg->exit_async) {
-        if (cfg->verbosity > 1)
-            fprintf(stderr, "sdr_handler exit\n");
+        if (cfg->verbosity >= 2)
+            print_log(LOG_INFO, "Input", "sdr_handler exit");
         sdr_stop(cfg->dev);
         cfg->exit_async++;
     }
@@ -1432,7 +1435,7 @@ static int start_sdr(r_cfg_t *cfg)
     r = sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
 
     if (cfg->verbosity || cfg->demod->level_limit < 0.0)
-        fprintf(stderr, "Bit detection level set to %.1f%s.\n", cfg->demod->level_limit, (cfg->demod->level_limit < 0.0 ? "" : " (Auto)"));
+        print_logf(LOG_NOTICE, "Input", "Bit detection level set to %.1f%s.", cfg->demod->level_limit, (cfg->demod->level_limit < 0.0 ? "" : " (Auto)"));
 
     r = sdr_apply_settings(cfg->dev, cfg->settings_str, 1); // always verbose for soapy
 
@@ -1446,12 +1449,12 @@ static int start_sdr(r_cfg_t *cfg)
     /* Reset endpoint before we start reading from it (mandatory) */
     r = sdr_reset(cfg->dev, cfg->verbosity);
     if (r < 0) {
-        fprintf(stderr, "WARNING: Failed to reset buffers.\n");
+        print_log(LOG_ERROR, "Input", "Failed to reset buffers.");
     }
     r = sdr_activate(cfg->dev);
 
     if (cfg->verbosity) {
-        fprintf(stderr, "Reading samples in async mode...\n");
+        print_log(LOG_NOTICE, "Input", "Reading samples in async mode...");
     }
 
     r = sdr_set_center_freq(cfg->dev, cfg->center_frequency, 1); // always verbose
@@ -1459,7 +1462,7 @@ static int start_sdr(r_cfg_t *cfg)
     r = sdr_start(cfg->dev, acquire_callback, (void *)get_mgr(cfg),
             DEFAULT_ASYNC_BUF_NUMBER, cfg->out_block_size);
     if (r < 0) {
-        fprintf(stderr, "WARNING: async start failed (%i).\n", r);
+        print_logf(LOG_ERROR, "Input", "async start failed (%i).", r);
     }
 
     cfg->dev_state = DEVICE_STATE_STARTING;
@@ -1496,24 +1499,24 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
         // We expect a frame at least every 250 ms but didn't get one
         if (cfg->dev_state == DEVICE_STATE_GRACE) {
             if (cfg->dev_mode == DEVICE_MODE_QUIT) {
-                write_err("Input device start failed, exiting!\n");
+                print_log(LOG_ERROR, "Input", "Input device start failed, exiting!");
             }
             else if (cfg->dev_mode == DEVICE_MODE_RESTART) {
-                write_err("Input device start failed, restarting!\n");
+                print_log(LOG_WARNING, "Input", "Input device start failed, restarting!");
             }
             else { // DEVICE_MODE_PAUSE or DEVICE_MODE_MANUAL
-                write_err("Input device start failed, pausing!\n");
+                print_log(LOG_WARNING, "Input", "Input device start failed, pausing!");
             }
         }
         else if (cfg->dev_state == DEVICE_STATE_STARTED) {
             if (cfg->dev_mode == DEVICE_MODE_QUIT) {
-                write_err("Async read stalled, exiting!\n");
+                print_log(LOG_ERROR, "Input", "Async read stalled, exiting!");
             }
             else if (cfg->dev_mode == DEVICE_MODE_RESTART) {
-                write_err("Async read stalled, restarting!\n");
+                print_log(LOG_WARNING, "Input", "Async read stalled, restarting!");
             }
             else { // DEVICE_MODE_PAUSE or DEVICE_MODE_MANUAL
-                write_err("Async read stalled, pausing!\n");
+                print_log(LOG_WARNING, "Input", "Async read stalled, pausing!");
             }
         }
         cfg->exit_code = 3;
@@ -1989,7 +1992,7 @@ int main(int argc, char **argv) {
     //while (cfg->exit_async < 2) {
     //    mg_mgr_poll(cfg->mgr, 100);
     //}
-    //sdr_stop(cfg->dev);
+    sdr_stop(cfg->dev);
     //print_log(LOG_NOTICE, "rtl_433", "STOPPED MGR loop.");
 
     if (cfg->report_stats > 0) {
